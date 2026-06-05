@@ -39,7 +39,7 @@ The primary objective is to reduce fraud, increase transparency, and improve con
 
 ### Backend
 
-* Java
+* Node.js (Express + TypeScript + Prisma) — see `Backend/readme.md`
 
 ### Database
 
@@ -64,16 +64,7 @@ ME2U/
 
 ## Current Development Status
 
-The project is currently in the planning and architecture phase.
-
-Areas being designed:
-
-* System workflow
-* Database schema
-* Escrow payment flow
-* User interface structure
-* API design
-* Delivery confirmation process
+**Status:** Frontend prototype (`Front end/`) and backend API scaffold (`Backend/`) are in progress. Run the API per `Backend/readme.md`.
 
 ## Future Enhancements
 

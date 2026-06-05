@@ -1,0 +1,16 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: me2u-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: me2u
+      POSTGRES_PASSWORD: me2u
+      POSTGRES_DB: me2u
+    ports:
+      - "5432:5432"
+    volumes:
+      - me2u_pg_data:/var/lib/postgresql/data
+
+volumes:
+  me2u_pg_data:
