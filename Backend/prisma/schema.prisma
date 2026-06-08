@@ -1,3 +1,6 @@
+// ME2U — Prisma schema
+// Database: PostgreSQL
+
 generator client {
   provider = "prisma-client-js"
 }
@@ -11,11 +14,6 @@ enum UserRole {
   BUYER
   SELLER
   ADMIN
-}
-
-enum WalletProvider {
-  MTN
-  AIRTEL
 }
 
 enum OrderStatus {
@@ -32,14 +30,11 @@ enum PaymentStatus {
   ESCROWED
   RELEASED
   REFUNDED
-  FAILED
 }
 
-enum DisputeStatus {
-  OPEN
-  RESOLVED_SELLER
-  RESOLVED_BUYER
-  RESOLVED_SPLIT
+enum WalletProvider {
+  MTN
+  AIRTEL
 }
 
 enum LedgerType {
@@ -49,67 +44,67 @@ enum LedgerType {
   SPLIT
 }
 
-model User {
-  id             String          @id @default(uuid())
-  phone          String          @unique
-  name           String
-  role           UserRole
-  walletProvider WalletProvider?
-  createdAt      DateTime        @default(now())
-  updatedAt      DateTime        @updatedAt
+enum DisputeStatus {
+  OPEN
+  RESOLVED_SELLER
+  RESOLVED_BUYER
+  RESOLVED_SPLIT
+}
 
-  buyerOrders  Order[] @relation("BuyerOrders")
-  sellerOrders Order[] @relation("SellerOrders")
-  disputes     Dispute[] @relation("DisputeRaisedBy")
+model User {
+  id        String   @id @default(uuid())
+  name      String
+  phone     String   @unique
+  role      UserRole
+  createdAt DateTime @default(now())
+
+  buyerOrders  Order[]   @relation("BuyerOrders")
+  sellerOrders Order[]   @relation("SellerOrders")
+  disputes     Dispute[]
 }
 
 model Order {
-  id              String      @id @default(uuid())
-  publicId        String      @unique // e.g. ME2U-0041
+  id              String         @id @default(uuid())
+  publicId        String         @unique
   buyerId         String
   sellerId        String
   itemDescription String
-  amountZmw       Decimal     @db.Decimal(12, 2)
-  status          OrderStatus @default(PAYMENT_PENDING)
-  origin          String?
-  destination     String?
-  courier         String?
-  trackingNumber  String?
-  notes           String?
-  paymentProvider WalletProvider?
-  dispatchedAt    DateTime?
-  estimatedAt     DateTime?
-  arrivalAt       DateTime?
+  amountZmw       Decimal        @db.Decimal(12, 2)
+  status          OrderStatus    @default(PAYMENT_PENDING)
+  paymentProvider WalletProvider
+
+  origin        String?
+  destination   String
+  courier       String?
+  trackingNumber String?
+  notes         String?
+
+  dispatchedAt     DateTime?
+  estimatedAt      DateTime?
+  arrivalAt        DateTime?
   buyerConfirmedAt DateTime?
-  autoReleaseAt   DateTime?
-  createdAt       DateTime    @default(now())
-  updatedAt       DateTime    @updatedAt
+  autoReleaseAt    DateTime?
+  createdAt        DateTime  @default(now())
+  updatedAt        DateTime  @updatedAt
 
-  buyer    User            @relation("BuyerOrders", fields: [buyerId], references: [id])
-  seller   User            @relation("SellerOrders", fields: [sellerId], references: [id])
-  payment  Payment?
-  dispute  Dispute?
-  events   DeliveryEvent[]
-  ledger   EscrowLedgerEntry[]
-
-  @@index([buyerId])
-  @@index([sellerId])
-  @@index([status])
-  @@index([trackingNumber])
+  buyer   User     @relation("BuyerOrders", fields: [buyerId], references: [id])
+  seller  User     @relation("SellerOrders", fields: [sellerId], references: [id])
+  payment Payment?
+  dispute Dispute?
+  events  DeliveryEvent[]
+  ledger  EscrowLedgerEntry[]
 }
 
 model Payment {
-  id            String        @id @default(uuid())
-  orderId       String        @unique
-  status        PaymentStatus @default(PENDING)
-  provider      WalletProvider
-  externalRef   String?
-  escrowedAt    DateTime?
-  releasedAt    DateTime?
-  createdAt     DateTime      @default(now())
-  updatedAt     DateTime      @updatedAt
+  id         String        @id @default(uuid())
+  orderId    String        @unique
+  status     PaymentStatus @default(PENDING)
+  provider   WalletProvider
+  escrowedAt DateTime?
+  releasedAt DateTime?
+  createdAt  DateTime      @default(now())
 
-  order Order @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  order Order @relation(fields: [orderId], references: [id])
 }
 
 model Dispute {
@@ -121,22 +116,19 @@ model Dispute {
   status      DisputeStatus @default(OPEN)
   resolvedAt  DateTime?
   createdAt   DateTime      @default(now())
-  updatedAt   DateTime      @updatedAt
 
-  order    Order @relation(fields: [orderId], references: [id], onDelete: Cascade)
-  raisedBy User  @relation("DisputeRaisedBy", fields: [raisedById], references: [id])
+  order     Order @relation(fields: [orderId], references: [id])
+  raisedBy  User  @relation(fields: [raisedById], references: [id])
 }
 
 model DeliveryEvent {
-  id        String   @id @default(uuid())
-  orderId   String
-  title     String
-  detail    String?
+  id         String   @id @default(uuid())
+  orderId    String
+  title      String
+  detail     String?
   occurredAt DateTime @default(now())
 
-  order Order @relation(fields: [orderId], references: [id], onDelete: Cascade)
-
-  @@index([orderId])
+  order Order @relation(fields: [orderId], references: [id])
 }
 
 model EscrowLedgerEntry {
@@ -147,16 +139,5 @@ model EscrowLedgerEntry {
   note      String?
   createdAt DateTime   @default(now())
 
-  order Order @relation(fields: [orderId], references: [id], onDelete: Cascade)
-
-  @@index([orderId])
-}
-
-model DriverConfirmToken {
-  id        String   @id @default(uuid())
-  orderId   String   @unique
-  token     String   @unique
-  usedAt    DateTime?
-  expiresAt DateTime
-  createdAt DateTime @default(now())
+  order Order @relation(fields: [orderId], references: [id])
 }

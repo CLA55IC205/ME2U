@@ -1,17 +1,11 @@
-// ─── DATA ───
-const ORDERS = [
-  { id: 'ME2U-0041', buyer: 'Chanda Mwale', seller: 'TechZone Lusaka', item: 'Wireless Earbuds (2×)', amount: 380, status: 'in_transit', tracking: 'ZAM-2947831', courier: 'Zampost', origin: 'Lusaka CBD', destination: 'Chilenje', dispatched: '2025-06-02 09:14', estimated: '2025-06-03 17:00', arrivalConfirmed: false, buyerConfirmed: false, dispute: false, autoReleaseHours: 18 },
-  { id: 'ME2U-0038', buyer: 'Mulenga Bwalya', seller: 'ChizyShop', item: 'Phone Case + Screen Guard', amount: 95, status: 'delivered', tracking: '', courier: 'Own driver', origin: 'Kabwata', destination: 'Matero', dispatched: '2025-06-01 11:30', estimated: '2025-06-01 15:00', arrivalConfirmed: true, buyerConfirmed: true, dispute: false, autoReleaseHours: 0 },
-  { id: 'ME2U-0035', buyer: 'Thandiwe Phiri', seller: 'FreshMarket ZM', item: 'Kapenta 10kg + Groundnuts', amount: 620, status: 'dispute', tracking: 'ZAM-2939012', courier: 'Zampost', origin: 'Livingstone', destination: 'Lusaka', dispatched: '2025-05-30 08:00', estimated: '2025-06-01 12:00', arrivalConfirmed: true, buyerConfirmed: false, dispute: true, disputeReason: 'Package arrived damaged — kapenta bag was torn open. Photos submitted.', autoReleaseHours: 0 },
-  { id: 'ME2U-0033', buyer: 'Brian Lungu', seller: 'TechZone Lusaka', item: 'USB-C Hub', amount: 210, status: 'awaiting_dispatch', tracking: '', courier: '', origin: 'Lusaka CBD', destination: 'Woodlands', dispatched: '', estimated: '', arrivalConfirmed: false, buyerConfirmed: false, dispute: false, autoReleaseHours: 0 },
-  { id: 'ME2U-0029', buyer: 'Namukolo Sikazwe', seller: 'BabyGear ZM', item: 'Feeding Bottles Set', amount: 155, status: 'delivered', tracking: '', courier: 'Own driver', origin: 'Ibex Hill', destination: 'Kabulonga', dispatched: '2025-05-28 10:00', estimated: '2025-05-28 13:00', arrivalConfirmed: true, buyerConfirmed: true, dispute: false, autoReleaseHours: 0 },
-];
-
-const USERS = {
-  buyer: { name: 'Chanda Mwale', initials: 'CM', phone: '0977-441-882' },
-  seller: { name: 'TechZone Lusaka', initials: 'TZ', phone: '0955-330-221' },
-  admin: { name: 'Admin · ME2U', initials: 'AD', phone: '' },
+// ─── DATA (loaded from API) ───
+let ORDERS = [];
+let USERS = {
+  buyer: { name: '…', initials: '…', phone: '' },
+  seller: { name: '…', initials: '…', phone: '' },
+  admin: { name: '…', initials: 'AD', phone: '' },
 };
+let ADMIN = { escrow: null, users: [], pendingReleases: [] };
 
 const NAV = {
   buyer: [
@@ -42,11 +36,64 @@ let currentRole = 'buyer';
 let currentPage = 'buyer-dashboard';
 let currentTheme = localStorage.getItem('me2u-theme') || 'dark';
 
+// ─── API SYNC ───
+function findOrder(id) {
+  return ORDERS.find((x) => x.id === id);
+}
+
+function formatDt(iso) {
+  if (!iso) return '';
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return iso;
+  return d.toLocaleString('en-ZM', { dateStyle: 'short', timeStyle: 'short' });
+}
+
+async function refreshOrders() {
+  ME2U_API.setRole(currentRole);
+  ORDERS = await ME2U_API.getOrders();
+}
+
+async function refreshAdminData() {
+  if (currentRole !== 'admin') return;
+  const [escrow, users, pending] = await Promise.all([
+    ME2U_API.getEscrow(),
+    ME2U_API.getAdminUsers(),
+    ME2U_API.getAutoReleases(),
+  ]);
+  ADMIN.escrow = escrow;
+  ADMIN.users = users;
+  ADMIN.pendingReleases = pending;
+}
+
+function apiErrorHtml(err) {
+  return `
+    <div class="alert danger" style="margin:20px">
+      <span class="alert-icon">✗</span>
+      <div>
+        <strong>Could not reach the API</strong><br>
+        ${err.message || err}<br><br>
+        <span style="font-size:12px;color:var(--text2)">
+          Start the database: <code>cd Backend && ./scripts/setup-db.sh</code><br>
+          Start the API: <code>cd Backend && npm run dev</code>
+        </span>
+      </div>
+    </div>`;
+}
+
 // ─── INIT ───
-function init() {
+async function bootstrap() {
   loadTheme();
-  renderSidebar();
-  renderPage(currentPage);
+  const content = document.getElementById('content');
+  content.innerHTML = '<div class="card"><div class="card-title">Connecting to ME2U API…</div></div>';
+  try {
+    USERS = await ME2U_API.bootstrapUsers();
+    ME2U_API.setRole(currentRole);
+    await refreshOrders();
+    renderSidebar();
+    await renderPage(currentPage);
+  } catch (err) {
+    content.innerHTML = apiErrorHtml(err);
+  }
 }
 
 // ─── THEME ─────
@@ -102,17 +149,23 @@ document.addEventListener('click', function(e) {
   }
 });
 
-function switchRole(role) {
+window.switchRole = async function (role) {
   currentRole = role;
-  document.querySelectorAll('.role-btn').forEach(b => b.classList.remove('active'));
+  document.querySelectorAll('.role-btn').forEach((b) => b.classList.remove('active'));
   document.querySelector('.role-btn.' + role).classList.add('active');
-  const firstPage = NAV[role][0].page;
-  currentPage = firstPage;
+  currentPage = NAV[role][0].page;
   const settingsModal = document.getElementById('settings-modal');
   if (settingsModal) settingsModal.classList.add('hidden');
-  renderSidebar();
-  renderPage(currentPage);
-}
+  ME2U_API.setRole(currentRole);
+  try {
+    await refreshOrders();
+    if (currentRole === 'admin') await refreshAdminData();
+    renderSidebar();
+    await renderPage(currentPage);
+  } catch (err) {
+    document.getElementById('content').innerHTML = apiErrorHtml(err);
+  }
+};
 
 function renderSidebar() {
   const user = USERS[currentRole];
@@ -139,22 +192,29 @@ function renderSidebar() {
   `;
 }
 
-function navigateTo(page, navId) {
+window.navigateTo = async function (page, navId) {
   currentPage = page;
-  document.querySelectorAll('.nav-item').forEach(n => n.classList.remove('active'));
+  document.querySelectorAll('.nav-item').forEach((n) => n.classList.remove('active'));
   const el = document.getElementById('nav-' + navId);
   if (el) el.classList.add('active');
-  renderPage(page);
-}
+  await renderPage(page);
+};
 
-function renderPage(page) {
+async function renderPage(page) {
   const content = document.getElementById('content');
   const titleEl = document.getElementById('page-title');
   const actionsEl = document.getElementById('header-actions');
   actionsEl.innerHTML = '';
-
-  content.innerHTML = '';
+  content.innerHTML = '<div class="card"><div class="card-title">Loading…</div></div>';
   content.scrollTop = 0;
+
+  try {
+    await refreshOrders();
+    if (currentRole === 'admin') await refreshAdminData();
+  } catch (err) {
+    content.innerHTML = apiErrorHtml(err);
+    return;
+  }
 
   const pages = {
     'buyer-dashboard': pageBuyerDashboard,
@@ -194,6 +254,8 @@ function statusPill(status) {
     delivered: ['green', 'Delivered'],
     dispute: ['red', 'Dispute'],
     awaiting_dispatch: ['blue', 'Awaiting dispatch'],
+    payment_pending: ['gray', 'Payment pending'],
+    cancelled: ['gray', 'Cancelled'],
     released: ['green', 'Funds released'],
   };
   const [color, label] = map[status] || ['gray', status];
@@ -204,9 +266,10 @@ function fmtAmt(n) { return 'K ' + n.toLocaleString('en-ZM', {minimumFractionDig
 
 // ─── BUYER PAGES ───
 function pageBuyerDashboard() {
-  const myOrders = ORDERS.filter(o => o.buyer === 'Chanda Mwale');
+  const myOrders = ORDERS;
   const active = myOrders.filter(o => o.status === 'in_transit' || o.status === 'awaiting_dispatch');
   const totalEscrowed = active.reduce((s, o) => s + o.amount, 0);
+  const featured = myOrders.find(o => o.status === 'in_transit') || active[0];
 
   return {
     title: 'Dashboard',
@@ -235,8 +298,9 @@ function pageBuyerDashboard() {
         <div>Your money is safe. ME2U holds all payments in escrow until you confirm delivery or 24 hours after the seller marks arrival.</div>
       </div>
 
+      ${featured ? `
       <div class="card">
-        <div class="card-title">◎ Order ME2U-0041 — in transit</div>
+        <div class="card-title">◎ Order ${featured.id} — ${featured.status.replace(/_/g, ' ')}</div>
         <div class="escrow-flow">
           <div class="flow-node">
             <div class="flow-icon done">💳</div>
@@ -268,12 +332,13 @@ function pageBuyerDashboard() {
             <div class="flow-lbl">Released</div>
           </div>
         </div>
+        ${featured.status === 'in_transit' ? `
         <div style="margin-top:16px" class="action-row">
-          <button class="btn primary" onclick="confirmReceipt('ME2U-0041')">✓ Confirm received</button>
-          <button class="btn danger" onclick="openDispute('ME2U-0041')">⚠ Raise dispute</button>
+          <button class="btn primary" onclick="confirmReceipt('${featured.id}')">✓ Confirm received</button>
+          <button class="btn danger" onclick="openDispute('${featured.id}')">⚠ Raise dispute</button>
           <button class="btn" onclick="navigateTo('buyer-track','b-track')">Track parcel →</button>
-        </div>
-      </div>
+        </div>` : ''}
+      </div>` : ''}
 
       <div>
         <div class="sec-header">
@@ -301,8 +366,8 @@ function pageBuyerDashboard() {
 }
 
 function pageBuyerOrders() {
-  const myOrders = ORDERS.filter(o => o.buyer === 'Chanda Mwale');
-  const order = myOrders[0]; // active one
+  const myOrders = ORDERS;
+  const order = myOrders.find(o => o.status === 'in_transit') || myOrders[0];
 
   return {
     title: 'My Orders',
@@ -330,7 +395,7 @@ function pageBuyerOrders() {
         </div>
 
         <div id="order-detail-panel">
-          ${renderOrderDetailBuyer(order)}
+          ${order ? renderOrderDetailBuyer(order) : '<div class="empty"><div class="empty-icon">◫</div>No orders yet. Start a new transaction.</div>'}
         </div>
       </div>
     `,
@@ -339,7 +404,7 @@ function pageBuyerOrders() {
 }
 
 window.loadOrderDetail = function(id) {
-  const o = ORDERS.find(x => x.id === id);
+  const o = findOrder(id);
   const panel = document.getElementById('order-detail-panel');
   if (panel && o) panel.innerHTML = renderOrderDetailBuyer(o);
 };
@@ -379,8 +444,8 @@ function renderOrderDetailBuyer(o) {
         <div class="meta-item"><div class="meta-key">Courier</div><div class="meta-val">${o.courier || '—'}</div></div>
         <div class="meta-item"><div class="meta-key">Origin</div><div class="meta-val">${o.origin}</div></div>
         <div class="meta-item"><div class="meta-key">Destination</div><div class="meta-val">${o.destination}</div></div>
-        ${o.dispatched ? `<div class="meta-item"><div class="meta-key">Dispatched</div><div class="meta-val" style="font-size:12px">${o.dispatched}</div></div>` : ''}
-        ${o.estimated ? `<div class="meta-item"><div class="meta-key">Est. arrival</div><div class="meta-val" style="font-size:12px">${o.estimated}</div></div>` : ''}
+        ${o.dispatched ? `<div class="meta-item"><div class="meta-key">Dispatched</div><div class="meta-val" style="font-size:12px">${formatDt(o.dispatched)}</div></div>` : ''}
+        ${o.estimated ? `<div class="meta-item"><div class="meta-key">Est. arrival</div><div class="meta-val" style="font-size:12px">${formatDt(o.estimated)}</div></div>` : ''}
       </div>
       ${trackingSection}
       <div style="margin-top:14px">${autoRelease}</div>
@@ -403,15 +468,13 @@ function pageBuyerTrack() {
         <div class="form-group">
           <label class="form-label">Tracking number (e.g. ZAM-2947831)</label>
           <div style="display:flex;gap:10px">
-            <input class="form-input" id="track-input" placeholder="ZAM-XXXXXXX" value="ZAM-2947831" style="flex:1">
+            <input class="form-input" id="track-input" placeholder="ZAM-XXXXXXX" style="flex:1">
             <button class="btn primary" onclick="doTrack()">Track →</button>
           </div>
         </div>
       </div>
 
-      <div id="track-result">
-        ${renderTrackResult('ZAM-2947831')}
-      </div>
+      <div id="track-result"></div>
     `,
     init: () => {
       document.getElementById('track-input').addEventListener('keydown', e => { if (e.key==='Enter') doTrack(); });
@@ -419,46 +482,47 @@ function pageBuyerTrack() {
   };
 }
 
-window.doTrack = function() {
+window.doTrack = async function () {
   const val = document.getElementById('track-input').value.trim();
-  document.getElementById('track-result').innerHTML = renderTrackResult(val);
+  const el = document.getElementById('track-result');
+  if (!val) return;
+  el.innerHTML = '<div class="card"><div class="card-title">Looking up parcel…</div></div>';
+  try {
+    const data = await ME2U_API.track(val);
+    el.innerHTML = renderTrackResult(data);
+  } catch (err) {
+    el.innerHTML = `<div class="alert danger"><span class="alert-icon">✗</span><div>${err.message}</div></div>`;
+  }
 };
 
-function renderTrackResult(num) {
-  if (!num) return '';
-  const found = ORDERS.find(o => o.tracking === num);
-  if (!found) return `<div class="alert danger"><span class="alert-icon">✗</span><div>No parcel found for tracking number <strong>${num}</strong>. Check the number and try again.</div></div>`;
+function renderTrackResult(data) {
+  const found = data.order;
+  const timeline = data.timeline || [];
+  if (!found) {
+    return `<div class="alert danger"><span class="alert-icon">✗</span><div>Parcel not found.</div></div>`;
+  }
+  const steps = timeline.length
+    ? timeline.map((e, i) => {
+        const last = i === timeline.length - 1;
+        const dot = last ? 'active' : 'done';
+        return `
+        <div class="tl-step">
+          <div class="tl-left"><div class="tl-dot ${dot}">${last ? '▶' : '✓'}</div>${!last ? '<div class="tl-line done"></div>' : ''}</div>
+          <div class="tl-body"><div class="tl-title">${e.title}</div><div class="tl-desc">${e.detail || ''}</div><div class="tl-time">${formatDt(e.time)}</div></div>
+        </div>`;
+      }).join('')
+    : `<div class="tl-step"><div class="tl-body"><div class="tl-title">No tracking events yet</div></div></div>`;
+
   return `
     <div class="card">
-      <div class="card-title">📦 Parcel: ${num} &nbsp; ${statusPill('in_transit')}</div>
+      <div class="card-title">📦 Parcel: ${found.tracking || '—'} &nbsp; ${statusPill(found.status)}</div>
       <div class="order-meta" style="margin-bottom:18px">
         <div class="meta-item"><div class="meta-key">ME2U Order</div><div class="meta-val mono">${found.id}</div></div>
         <div class="meta-item"><div class="meta-key">Courier</div><div class="meta-val">${found.courier}</div></div>
         <div class="meta-item"><div class="meta-key">From</div><div class="meta-val">${found.origin}</div></div>
         <div class="meta-item"><div class="meta-key">To</div><div class="meta-val">${found.destination}</div></div>
       </div>
-      <div class="timeline">
-        <div class="tl-step">
-          <div class="tl-left"><div class="tl-dot done">✓</div><div class="tl-line done"></div></div>
-          <div class="tl-body"><div class="tl-title">Parcel received by courier</div><div class="tl-desc">Collected from TechZone Lusaka</div><div class="tl-time">2025-06-02 09:14</div></div>
-        </div>
-        <div class="tl-step">
-          <div class="tl-left"><div class="tl-dot done">✓</div><div class="tl-line done"></div></div>
-          <div class="tl-body"><div class="tl-title">Arrived at sorting facility</div><div class="tl-desc">Lusaka CBD Zampost hub</div><div class="tl-time">2025-06-02 11:55</div></div>
-        </div>
-        <div class="tl-step">
-          <div class="tl-left"><div class="tl-dot done">✓</div><div class="tl-line done"></div></div>
-          <div class="tl-body"><div class="tl-title">Departed for delivery area</div><div class="tl-desc">Chilenje sorting — out for delivery</div><div class="tl-time">2025-06-03 08:30</div></div>
-        </div>
-        <div class="tl-step">
-          <div class="tl-left"><div class="tl-dot active">▶</div><div class="tl-line"></div></div>
-          <div class="tl-body"><div class="tl-title">Out for delivery</div><div class="tl-desc">Estimated delivery by 17:00 today</div><div class="tl-time">2025-06-03 10:40</div></div>
-        </div>
-        <div class="tl-step">
-          <div class="tl-left"><div class="tl-dot pending">◯</div></div>
-          <div class="tl-body"><div class="tl-title">Delivered to recipient</div><div class="tl-desc" style="color:var(--text3)">Waiting...</div></div>
-        </div>
-      </div>
+      <div class="timeline">${steps}</div>
     </div>
   `;
 }
@@ -593,9 +657,28 @@ window.newStep2Back = function() {
   document.getElementById('new-step-3').style.display = 'none';
   document.getElementById('new-step-2').style.display = 'block';
 };
-window.submitNewOrder = function() {
-  toast('✓ Order created! Pay K ' + (document.getElementById('ns-amount')?.value||'0') + ' to ME2U Airtel: 0977-ME2U-ESC', 'success');
-  setTimeout(() => navigateTo('buyer-orders','b-orders'), 1800);
+window.submitNewOrder = async function () {
+  const amount = parseFloat(document.getElementById('ns-amount')?.value || '0');
+  const provider = document.getElementById('ns-payment')?.value === 'mtn' ? 'MTN' : 'AIRTEL';
+  const phone = document.getElementById('ns-phone')?.value || '';
+  try {
+    const { order, paymentInstructions } = await ME2U_API.createOrder({
+      sellerPhone: phone,
+      sellerName: document.getElementById('ns-seller')?.value,
+      itemDescription: document.getElementById('ns-item')?.value,
+      amountZmw: amount,
+      origin: document.getElementById('ns-origin')?.value,
+      destination: document.getElementById('ns-dest')?.value,
+      courier: document.getElementById('ns-courier')?.value || undefined,
+      notes: document.getElementById('ns-notes')?.value,
+      paymentProvider: provider,
+    });
+    await ME2U_API.confirmPayment(order.id);
+    toast('✓ ' + (paymentInstructions?.message || 'Order created and paid into escrow'), 'success');
+    setTimeout(() => navigateTo('buyer-orders', 'b-orders'), 1200);
+  } catch (err) {
+    toast(err.message || 'Failed to create order', 'warning');
+  }
 };
 
 function pageBuyerHistory() {
@@ -606,14 +689,14 @@ function pageBuyerHistory() {
         <table>
           <thead><tr><th>Order ID</th><th>Item</th><th>Seller</th><th>Amount</th><th>Status</th><th>Date</th></tr></thead>
           <tbody>
-            ${ORDERS.filter(o=>o.buyer==='Chanda Mwale').map(o=>`
+            ${ORDERS.map(o=>`
               <tr>
                 <td class="mono">${o.id}</td>
                 <td>${o.item}</td>
                 <td>${o.seller}</td>
                 <td class="mono">${fmtAmt(o.amount)}</td>
                 <td>${statusPill(o.status)}</td>
-                <td style="font-size:12px;color:var(--text3)">${o.dispatched||'—'}</td>
+                <td style="font-size:12px;color:var(--text3)">${formatDt(o.dispatched)||'—'}</td>
               </tr>`).join('')}
           </tbody>
         </table>
@@ -624,7 +707,8 @@ function pageBuyerHistory() {
 
 // ─── SELLER PAGES ───
 function pageSellerDashboard() {
-  const myOrders = ORDERS.filter(o => o.seller === 'TechZone Lusaka');
+  const myOrders = ORDERS;
+  const needsDispatch = myOrders.find(o => o.status === 'awaiting_dispatch');
   const pending = myOrders.filter(o => o.status === 'awaiting_dispatch' || o.status === 'in_transit');
   const totalEarned = myOrders.filter(o=>o.status==='delivered').reduce((s,o)=>s+o.amount,0);
   return {
@@ -654,13 +738,14 @@ function pageSellerDashboard() {
         <div>Order ME2U-0038 (K 95.00) — funds released to your MTN Money. Well done!</div>
       </div>
 
+      ${needsDispatch ? `
       <div class="card">
-        <div class="card-title">⏳ Action needed — ME2U-0033</div>
+        <div class="card-title">⏳ Action needed — ${needsDispatch.id}</div>
         <div class="order-meta" style="margin-bottom:16px">
-          <div class="meta-item"><div class="meta-key">Buyer</div><div class="meta-val">Brian Lungu</div></div>
-          <div class="meta-item"><div class="meta-key">Item</div><div class="meta-val">USB-C Hub</div></div>
-          <div class="meta-item"><div class="meta-key">Amount (in escrow)</div><div class="meta-val" style="color:var(--accent);font-family:var(--mono)">K 210.00</div></div>
-          <div class="meta-item"><div class="meta-key">Status</div><div class="meta-val">${statusPill('awaiting_dispatch')}</div></div>
+          <div class="meta-item"><div class="meta-key">Buyer</div><div class="meta-val">${needsDispatch.buyer}</div></div>
+          <div class="meta-item"><div class="meta-key">Item</div><div class="meta-val">${needsDispatch.item}</div></div>
+          <div class="meta-item"><div class="meta-key">Amount (in escrow)</div><div class="meta-val" style="color:var(--accent);font-family:var(--mono)">${fmtAmt(needsDispatch.amount)}</div></div>
+          <div class="meta-item"><div class="meta-key">Status</div><div class="meta-val">${statusPill(needsDispatch.status)}</div></div>
         </div>
         <div class="alert warning">
           <span class="alert-icon">⚠</span>
@@ -669,7 +754,7 @@ function pageSellerDashboard() {
         <div class="action-row" style="margin-top:14px">
           <button class="btn primary" onclick="navigateTo('seller-dispatch','s-dispatch')">Mark as dispatched →</button>
         </div>
-      </div>
+      </div>` : ''}
 
       <div>
         <div class="sec-header" style="margin-bottom:10px"><div class="sec-title">My orders</div></div>
@@ -690,7 +775,7 @@ function pageSellerDashboard() {
 }
 
 function pageSellerOrders() {
-  const myOrders = ORDERS.filter(o => o.seller === 'TechZone Lusaka');
+  const myOrders = ORDERS;
   return {
     title: 'Orders',
     html: `
@@ -719,7 +804,7 @@ function pageSellerOrders() {
 }
 
 window.showSellerOrderModal = function(id) {
-  const o = ORDERS.find(x=>x.id===id);
+  const o = findOrder(id);
   if (!o) return;
   openModal(
     `Order ${o.id}`,
@@ -738,7 +823,7 @@ window.showSellerOrderModal = function(id) {
 };
 
 function pageSellerDispatch() {
-  const toDo = ORDERS.filter(o => o.seller === 'TechZone Lusaka' && (o.status === 'awaiting_dispatch' || o.status === 'in_transit'));
+  const toDo = ORDERS.filter(o => o.status === 'awaiting_dispatch' || o.status === 'in_transit');
   return {
     title: 'Dispatch',
     html: `
@@ -787,6 +872,10 @@ function pageSellerDispatch() {
             </div>
             <div style="font-size:11px;color:var(--text3);margin-top:6px">Share this link with your driver. When they tap it after meeting the buyer, it serves as delivery confirmation.</div>
           </div>` : ''}
+          ${o.status === 'in_transit' && !o.arrivalConfirmed ? `
+          <div class="action-row" style="margin-top:14px">
+            <button class="btn primary" onclick="markArrival('${o.id}')">📍 Mark arrived at buyer</button>
+          </div>` : ''}
         `}
       </div>`).join('')}
       ${toDo.length===0?`<div class="empty"><div class="empty-icon">✓</div>No orders pending dispatch.</div>`:''}
@@ -794,16 +883,27 @@ function pageSellerDispatch() {
   };
 }
 
-window.markDispatched = function(id) {
-  const o = ORDERS.find(x=>x.id===id);
-  if (!o) return;
-  o.status = 'in_transit';
-  o.courier = document.getElementById('courier-'+id)?.value || 'Own driver';
-  o.tracking = document.getElementById('tracking-'+id)?.value || '';
-  o.dispatched = new Date().toLocaleString('en-ZM');
-  o.autoReleaseHours = 24;
-  toast('✓ Dispatch confirmed! Buyer notified.', 'success');
-  setTimeout(() => renderPage(currentPage), 400);
+window.markDispatched = async function (id) {
+  try {
+    await ME2U_API.dispatch(id, {
+      courier: document.getElementById('courier-' + id)?.value || 'Own driver',
+      trackingNumber: document.getElementById('tracking-' + id)?.value || undefined,
+    });
+    toast('✓ Dispatch confirmed! Buyer notified.', 'success');
+    await renderPage(currentPage);
+  } catch (err) {
+    toast(err.message || 'Dispatch failed', 'warning');
+  }
+};
+
+window.markArrival = async function (id) {
+  try {
+    await ME2U_API.markArrival(id);
+    toast('✓ Arrival recorded. 24h auto-release timer started.', 'success');
+    await renderPage(currentPage);
+  } catch (err) {
+    toast(err.message || 'Could not mark arrival', 'warning');
+  }
 };
 
 function pageSellerHistory() {
@@ -817,8 +917,8 @@ function pageSellerProfile() {
         <div class="card">
           <div class="card-title">◯ Seller profile</div>
           <div class="order-meta">
-            <div class="meta-item"><div class="meta-key">Business name</div><div class="meta-val">TechZone Lusaka</div></div>
-            <div class="meta-item"><div class="meta-key">Phone</div><div class="meta-val">0955-330-221</div></div>
+            <div class="meta-item"><div class="meta-key">Business name</div><div class="meta-val">${USERS.seller.name}</div></div>
+            <div class="meta-item"><div class="meta-key">Phone</div><div class="meta-val">${USERS.seller.phone}</div></div>
             <div class="meta-item"><div class="meta-key">Payout wallet</div><div class="meta-val">MTN Money</div></div>
             <div class="meta-item"><div class="meta-key">Member since</div><div class="meta-val">March 2024</div></div>
             <div class="meta-item"><div class="meta-key">Total orders</div><div class="meta-val">12</div></div>
@@ -848,7 +948,9 @@ function pageSellerProfile() {
 // ─── ADMIN PAGES ───
 function pageAdminDashboard() {
   const total = ORDERS.reduce((s,o)=>s+o.amount,0);
-  const escrow = ORDERS.filter(o=>o.status!=='delivered').reduce((s,o)=>s+o.amount,0);
+  const escrow = ADMIN.escrow?.totalHeldZmw ?? ORDERS.filter(o=>o.status!=='delivered').reduce((s,o)=>s+o.amount,0);
+  const openDisputes = ORDERS.filter(o=>o.dispute);
+  const disputeAlert = openDisputes[0];
   return {
     title: 'Admin Overview',
     html: `
@@ -875,10 +977,11 @@ function pageAdminDashboard() {
         </div>
       </div>
 
+      ${disputeAlert ? `
       <div class="alert danger">
         <span class="alert-icon">⚠</span>
-        <div><strong>1 dispute requires your attention</strong> — ME2U-0035 (Thandiwe Phiri vs FreshMarket ZM). <span style="text-decoration:underline;cursor:pointer" onclick="navigateTo('admin-disputes','a-disputes')">Review now →</span></div>
-      </div>
+        <div><strong>${openDisputes.length} dispute(s) require attention</strong> — ${disputeAlert.id} (${disputeAlert.buyer} vs ${disputeAlert.seller}). <span style="text-decoration:underline;cursor:pointer" onclick="navigateTo('admin-disputes','a-disputes')">Review now →</span></div>
+      </div>` : ''}
 
       <div>
         <div class="sec-header" style="margin-bottom:10px"><div class="sec-title">All orders</div><div class="sec-action" onclick="navigateTo('admin-orders','a-orders')">View all</div></div>
@@ -899,8 +1002,10 @@ function pageAdminDashboard() {
 }
 
 function pageAdminEscrow() {
-  const held = ORDERS.filter(o=>o.status!=='delivered');
-  const total = held.reduce((s,o)=>s+o.amount,0);
+  const held = ADMIN.escrow?.orders ?? ORDERS.filter(o=>o.status!=='delivered');
+  const total = ADMIN.escrow?.totalHeldZmw ?? held.reduce((s,o)=>s+(o.amount||0),0);
+  const airtel = ADMIN.escrow?.byProvider?.airtel ?? total * 0.6;
+  const mtn = ADMIN.escrow?.byProvider?.mtn ?? total * 0.4;
   return {
     title: 'Escrow Wallet',
     html: `
@@ -911,8 +1016,8 @@ function pageAdminEscrow() {
           <div style="font-size:12px;color:var(--text2)">Held across Airtel Money + MTN Money accounts</div>
           <hr class="divider" style="margin:14px 0">
           <div style="display:flex;gap:20px">
-            <div><div style="font-size:11px;color:var(--text3)">Airtel Money</div><div style="font-family:var(--mono);color:var(--blue)">${fmtAmt(total*0.6)}</div></div>
-            <div><div style="font-size:11px;color:var(--text3)">MTN Money</div><div style="font-family:var(--mono);color:var(--amber)">${fmtAmt(total*0.4)}</div></div>
+            <div><div style="font-size:11px;color:var(--text3)">Airtel Money</div><div style="font-family:var(--mono);color:var(--blue)">${fmtAmt(airtel)}</div></div>
+            <div><div style="font-size:11px;color:var(--text3)">MTN Money</div><div style="font-family:var(--mono);color:var(--amber)">${fmtAmt(mtn)}</div></div>
           </div>
         </div>
         <div class="card">
@@ -965,7 +1070,7 @@ function pageAdminOrders() {
 }
 
 window.adminOrderModal = function(id) {
-  const o = ORDERS.find(x=>x.id===id);
+  const o = findOrder(id);
   openModal(`${o.id} — Admin view`,
     `<div class="order-meta">
       <div class="meta-item"><div class="meta-key">Buyer</div><div class="meta-val">${o.buyer}</div></div>
@@ -980,12 +1085,15 @@ window.adminOrderModal = function(id) {
   );
 };
 
-window.adminForceRelease = function(id) {
-  const o = ORDERS.find(x=>x.id===id);
-  o.status = 'delivered'; o.buyerConfirmed = true;
-  closeModal();
-  toast('✓ Funds force-released to ' + o.seller, 'success');
-  setTimeout(() => renderPage(currentPage), 400);
+window.adminForceRelease = async function (id) {
+  try {
+    const { order } = await ME2U_API.forceRelease(id);
+    closeModal();
+    toast('✓ Funds force-released to ' + order.seller, 'success');
+    await renderPage(currentPage);
+  } catch (err) {
+    toast(err.message || 'Release failed', 'warning');
+  }
 };
 
 function pageAdminDisputes() {
@@ -1021,19 +1129,24 @@ function pageAdminDisputes() {
   };
 }
 
-window.resolveDispute = function(id, resolution) {
-  const o = ORDERS.find(x=>x.id===id);
-  o.dispute = false;
-  o.status = 'delivered';
-  const msgs = { seller: `Funds released to ${o.seller}`, buyer: `K${o.amount} refunded to ${o.buyer}`, split: `Split: K${o.amount/2} each` };
-  closeModal();
-  toast('✓ Dispute resolved — ' + msgs[resolution], 'success');
-  setTimeout(() => renderPage(currentPage), 400);
+window.resolveDispute = async function (id, resolution) {
+  try {
+    const { order } = await ME2U_API.resolveDispute(id, resolution);
+    const msgs = {
+      seller: `Funds released to ${order.seller}`,
+      buyer: `K${order.amount} refunded to ${order.buyer}`,
+      split: `Split: K${order.amount / 2} each`,
+    };
+    toast('✓ Dispute resolved — ' + msgs[resolution], 'success');
+    await renderPage(currentPage);
+  } catch (err) {
+    toast(err.message || 'Could not resolve dispute', 'warning');
+  }
 };
 
 function pageAdminUsers() {
-  const buyers = [...new Set(ORDERS.map(o=>o.buyer))];
-  const sellers = [...new Set(ORDERS.map(o=>o.seller))];
+  const buyers = ADMIN.users.filter((u) => u.role === 'buyer');
+  const sellers = ADMIN.users.filter((u) => u.role === 'seller');
   return {
     title: 'Users',
     html: `
@@ -1042,12 +1155,12 @@ function pageAdminUsers() {
           <div class="sec-header" style="margin-bottom:10px"><div class="sec-title">Buyers</div></div>
           <div class="table-wrap">
             <table>
-              <thead><tr><th>Name</th><th>Orders</th><th>Trust</th></tr></thead>
+              <thead><tr><th>Name</th><th>Phone</th><th>Orders</th></tr></thead>
               <tbody>
                 ${buyers.map(b=>`<tr>
-                  <td>${b}</td>
-                  <td>${ORDERS.filter(o=>o.buyer===b).length}</td>
-                  <td><span class="pill green">Good</span></td>
+                  <td>${b.name}</td>
+                  <td class="mono" style="font-size:12px">${b.phone}</td>
+                  <td>${b.orderCount}</td>
                 </tr>`).join('')}
               </tbody>
             </table>
@@ -1057,12 +1170,12 @@ function pageAdminUsers() {
           <div class="sec-header" style="margin-bottom:10px"><div class="sec-title">Sellers</div></div>
           <div class="table-wrap">
             <table>
-              <thead><tr><th>Name</th><th>Orders</th><th>Trust</th></tr></thead>
+              <thead><tr><th>Name</th><th>Phone</th><th>Orders</th></tr></thead>
               <tbody>
                 ${sellers.map(s=>`<tr>
-                  <td>${s}</td>
-                  <td>${ORDERS.filter(o=>o.seller===s).length}</td>
-                  <td><span class="pill ${s==='FreshMarket ZM'?'amber':'green'}">${s==='FreshMarket ZM'?'Review':'Good'}</span></td>
+                  <td>${s.name}</td>
+                  <td class="mono" style="font-size:12px">${s.phone}</td>
+                  <td>${s.orderCount}</td>
                 </tr>`).join('')}
               </tbody>
             </table>
@@ -1074,7 +1187,9 @@ function pageAdminUsers() {
 }
 
 function pageAdminReleases() {
-  const pending = ORDERS.filter(o=>o.status==='in_transit'&&o.autoReleaseHours>0);
+  const pending = ADMIN.pendingReleases?.length
+    ? ADMIN.pendingReleases
+    : ORDERS.filter(o=>o.status==='in_transit'&&o.autoReleaseHours>0);
   return {
     title: 'Auto-Releases',
     html: `
@@ -1115,12 +1230,15 @@ window.confirmReceipt = function(id) {
   );
 };
 
-window.doConfirm = function(id) {
-  const o = ORDERS.find(x=>x.id===id);
-  if (o) { o.status = 'delivered'; o.buyerConfirmed = true; }
-  closeModal();
-  toast('✓ Confirmed! Funds released to seller.', 'success');
-  setTimeout(() => renderPage(currentPage), 400);
+window.doConfirm = async function (id) {
+  try {
+    await ME2U_API.confirmReceipt(id);
+    closeModal();
+    toast('✓ Confirmed! Funds released to seller.', 'success');
+    await renderPage(currentPage);
+  } catch (err) {
+    toast(err.message || 'Confirmation failed', 'warning');
+  }
 };
 
 window.openDispute = function(id) {
@@ -1145,14 +1263,17 @@ window.openDispute = function(id) {
   );
 };
 
-window.submitDispute = function(id) {
-  const o = ORDERS.find(x=>x.id===id);
+window.submitDispute = async function (id) {
   const reason = document.getElementById('dispute-reason-sel')?.value;
   const detail = document.getElementById('dispute-detail')?.value;
-  if (o) { o.status = 'dispute'; o.dispute = true; o.disputeReason = `${reason}${detail?' — '+detail:''}`; }
-  closeModal();
-  toast('Dispute submitted. Admin will review within 24–48h.', 'warning');
-  setTimeout(() => renderPage(currentPage), 400);
+  try {
+    await ME2U_API.raiseDispute(id, { reason, detail });
+    closeModal();
+    toast('Dispute submitted. Admin will review within 24–48h.', 'warning');
+    await renderPage(currentPage);
+  } catch (err) {
+    toast(err.message || 'Could not submit dispute', 'warning');
+  }
 };
 
 // ─── MODAL ───
@@ -1194,4 +1315,4 @@ window.addEventListener('load', function() {
     if (lightLabel) lightLabel.classList.remove('active');
   }
 });
-init();
+bootstrap();

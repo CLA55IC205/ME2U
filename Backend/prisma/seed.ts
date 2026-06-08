@@ -1,255 +1,221 @@
-import {
-  DisputeStatus,
-  OrderStatus,
-  PaymentStatus,
-  Prisma,
-  PrismaClient,
-  UserRole,
-  WalletProvider,
-} from '@prisma/client';
+/**
+ * ME2U seed — creates dev users (Chanda/TechZone/Admin)
+ * and a handful of sample orders in different lifecycle stages.
+ *
+ * Run:  cd Backend && npx prisma db seed
+ *       (or via: npm run db:seed)
+ */
+import { PrismaClient, UserRole, OrderStatus, PaymentStatus, WalletProvider, LedgerType, DisputeStatus } from '@prisma/client';
+import { Decimal } from '@prisma/client/runtime/library';
 
 const prisma = new PrismaClient();
 
 async function main() {
-  await prisma.escrowLedgerEntry.deleteMany();
-  await prisma.deliveryEvent.deleteMany();
-  await prisma.driverConfirmToken.deleteMany();
-  await prisma.dispute.deleteMany();
-  await prisma.payment.deleteMany();
-  await prisma.order.deleteMany();
-  await prisma.user.deleteMany();
+  console.log('🌱  Seeding ME2U database…');
 
-  const chanda = await prisma.user.create({
-    data: {
-      phone: '0977441882',
-      name: 'Chanda Mwale',
+  // ── Users ──────────────────────────────────────────────────────────────
+  const buyer = await prisma.user.upsert({
+    where: { phone: '260971000001' },
+    update: {},
+    create: {
+      phone: '260971000001',
+      name: 'Chanda Mutale',
       role: UserRole.BUYER,
-      walletProvider: WalletProvider.AIRTEL,
     },
   });
-  const mulenga = await prisma.user.create({
-    data: { phone: '0971000001', name: 'Mulenga Bwalya', role: UserRole.BUYER },
-  });
-  const thandiwe = await prisma.user.create({
-    data: { phone: '0971000002', name: 'Thandiwe Phiri', role: UserRole.BUYER },
-  });
-  const brian = await prisma.user.create({
-    data: { phone: '0971000003', name: 'Brian Lungu', role: UserRole.BUYER },
-  });
-  const namukolo = await prisma.user.create({
-    data: { phone: '0971000004', name: 'Namukolo Sikazwe', role: UserRole.BUYER },
-  });
 
-  const techZone = await prisma.user.create({
-    data: {
-      phone: '0955330221',
+  const seller = await prisma.user.upsert({
+    where: { phone: '260955000002' },
+    update: {},
+    create: {
+      phone: '260955000002',
       name: 'TechZone Lusaka',
       role: UserRole.SELLER,
-      walletProvider: WalletProvider.MTN,
     },
   });
-  const chizy = await prisma.user.create({
-    data: { phone: '0955000001', name: 'ChizyShop', role: UserRole.SELLER },
-  });
-  const freshMarket = await prisma.user.create({
-    data: { phone: '0955000002', name: 'FreshMarket ZM', role: UserRole.SELLER },
-  });
-  const babyGear = await prisma.user.create({
-    data: { phone: '0955000003', name: 'BabyGear ZM', role: UserRole.SELLER },
+
+  const admin = await prisma.user.upsert({
+    where: { phone: '260900000099' },
+    update: {},
+    create: {
+      phone: '260900000099',
+      name: 'ME2U Admin',
+      role: UserRole.ADMIN,
+    },
   });
 
-  await prisma.user.create({
-    data: { phone: '0000000000', name: 'Admin · ME2U', role: UserRole.ADMIN },
-  });
+  console.log(`  ✓ Users: ${buyer.name}, ${seller.name}, ${admin.name}`);
 
-  type SeedOrder = {
-    publicId: string;
-    buyerId: string;
-    sellerId: string;
-    item: string;
-    amount: number;
-    status: OrderStatus;
-    tracking?: string;
-    courier?: string;
-    origin?: string;
-    destination?: string;
-    dispatchedAt?: Date;
-    estimatedAt?: Date;
-    arrivalAt?: Date;
-    buyerConfirmedAt?: Date;
-    autoReleaseAt?: Date;
-    dispute?: { reason: string; status: DisputeStatus };
-  };
+  // ── Helper: delete any leftover seed orders so re-seeding is safe ──────
+  await prisma.escrowLedgerEntry.deleteMany({});
+  await prisma.deliveryEvent.deleteMany({});
+  await prisma.dispute.deleteMany({});
+  await prisma.payment.deleteMany({});
+  await prisma.order.deleteMany({});
 
-  const orders: SeedOrder[] = [
-    {
-      publicId: 'ME2U-0041',
-      buyerId: chanda.id,
-      sellerId: techZone.id,
-      item: 'Wireless Earbuds (2×)',
-      amount: 380,
+  // ── Order 1 — IN_TRANSIT with tracking ────────────────────────────────
+  const o1 = await prisma.order.create({
+    data: {
+      publicId: 'ME2U-0001',
+      buyerId: buyer.id,
+      sellerId: seller.id,
+      itemDescription: 'Wireless Earbuds (2×)',
+      amountZmw: new Decimal(450.00),
       status: OrderStatus.IN_TRANSIT,
-      tracking: 'ZAM-2947831',
-      courier: 'Zampost',
+      paymentProvider: WalletProvider.AIRTEL,
       origin: 'Lusaka CBD',
-      destination: 'Chilenje',
-      dispatchedAt: new Date('2025-06-02T09:14:00'),
-      estimatedAt: new Date('2025-06-03T17:00:00'),
-      autoReleaseAt: new Date(Date.now() + 18 * 60 * 60 * 1000),
-    },
-    {
-      publicId: 'ME2U-0038',
-      buyerId: mulenga.id,
-      sellerId: chizy.id,
-      item: 'Phone Case + Screen Guard',
-      amount: 95,
-      status: OrderStatus.DELIVERED,
-      courier: 'Own driver',
-      origin: 'Kabwata',
-      destination: 'Matero',
-      dispatchedAt: new Date('2025-06-01T11:30:00'),
-      estimatedAt: new Date('2025-06-01T15:00:00'),
-      arrivalAt: new Date('2025-06-01T15:00:00'),
-      buyerConfirmedAt: new Date('2025-06-01T16:00:00'),
-    },
-    {
-      publicId: 'ME2U-0035',
-      buyerId: thandiwe.id,
-      sellerId: freshMarket.id,
-      item: 'Kapenta 10kg + Groundnuts',
-      amount: 620,
-      status: OrderStatus.DISPUTE,
-      tracking: 'ZAM-2939012',
+      destination: 'Chilenje, Lusaka',
       courier: 'Zampost',
-      origin: 'Livingstone',
-      destination: 'Lusaka',
-      dispatchedAt: new Date('2025-05-30T08:00:00'),
-      estimatedAt: new Date('2025-06-01T12:00:00'),
-      arrivalAt: new Date('2025-06-01T12:00:00'),
-      dispute: {
-        reason: 'Package arrived damaged',
-        status: DisputeStatus.OPEN,
-      },
-    },
-    {
-      publicId: 'ME2U-0033',
-      buyerId: brian.id,
-      sellerId: techZone.id,
-      item: 'USB-C Hub',
-      amount: 210,
-      status: OrderStatus.AWAITING_DISPATCH,
-      origin: 'Lusaka CBD',
-      destination: 'Woodlands',
-    },
-    {
-      publicId: 'ME2U-0029',
-      buyerId: namukolo.id,
-      sellerId: babyGear.id,
-      item: 'Feeding Bottles Set',
-      amount: 155,
-      status: OrderStatus.DELIVERED,
-      courier: 'Own driver',
-      origin: 'Ibex Hill',
-      destination: 'Kabulonga',
-      dispatchedAt: new Date('2025-05-28T10:00:00'),
-      estimatedAt: new Date('2025-05-28T13:00:00'),
-      arrivalAt: new Date('2025-05-28T13:00:00'),
-      buyerConfirmedAt: new Date('2025-05-28T14:00:00'),
-    },
-  ];
-
-  for (const o of orders) {
-    const order = await prisma.order.create({
-      data: {
-        publicId: o.publicId,
-        buyerId: o.buyerId,
-        sellerId: o.sellerId,
-        itemDescription: o.item,
-        amountZmw: new Prisma.Decimal(o.amount),
-        status: o.status,
-        origin: o.origin,
-        destination: o.destination,
-        courier: o.courier,
-        trackingNumber: o.tracking,
-        dispatchedAt: o.dispatchedAt,
-        estimatedAt: o.estimatedAt,
-        arrivalAt: o.arrivalAt,
-        buyerConfirmedAt: o.buyerConfirmedAt,
-        autoReleaseAt: o.autoReleaseAt,
-        paymentProvider: WalletProvider.AIRTEL,
-      },
-    });
-
-    const payStatus =
-      o.status === OrderStatus.DELIVERED
-        ? PaymentStatus.RELEASED
-        : o.status === OrderStatus.PAYMENT_PENDING
-          ? PaymentStatus.PENDING
-          : PaymentStatus.ESCROWED;
-
-    await prisma.payment.create({
-      data: {
-        orderId: order.id,
-        status: payStatus,
-        provider: WalletProvider.AIRTEL,
-        escrowedAt: payStatus !== PaymentStatus.PENDING ? new Date() : undefined,
-        releasedAt: payStatus === PaymentStatus.RELEASED ? new Date() : undefined,
-      },
-    });
-
-    if (payStatus === PaymentStatus.ESCROWED || payStatus === PaymentStatus.RELEASED) {
-      await prisma.escrowLedgerEntry.create({
-        data: {
-          orderId: order.id,
-          type: 'HOLD',
-          amountZmw: new Prisma.Decimal(o.amount),
-          note: 'Buyer payment held in escrow',
+      trackingNumber: 'ZAM-2947831',
+      dispatchedAt: new Date(Date.now() - 2 * 24 * 60 * 60 * 1000),
+      arrivalAt: new Date(Date.now() - 4 * 60 * 60 * 1000),
+      autoReleaseAt: new Date(Date.now() + 20 * 60 * 60 * 1000),
+      payment: {
+        create: {
+          status: PaymentStatus.ESCROWED,
+          provider: WalletProvider.AIRTEL,
+          escrowedAt: new Date(Date.now() - 3 * 24 * 60 * 60 * 1000),
         },
-      });
-    }
-
-    if (o.dispute) {
-      await prisma.dispute.create({
-        data: {
-          orderId: order.id,
-          raisedById: o.buyerId,
-          reason: o.dispute.reason,
-          detail:
-            'Package arrived damaged — kapenta bag was torn open. Photos submitted.',
-          status: o.dispute.status,
+      },
+      events: {
+        createMany: {
+          data: [
+            { title: 'Order created', detail: 'Buyer placed order via ME2U', occurredAt: new Date(Date.now() - 3 * 24 * 60 * 60 * 1000) },
+            { title: 'Payment escrowed', detail: 'K 450.00 held by ME2U', occurredAt: new Date(Date.now() - 3 * 24 * 60 * 60 * 1000 + 5 * 60 * 1000) },
+            { title: 'Parcel dispatched', detail: 'Via Zampost', occurredAt: new Date(Date.now() - 2 * 24 * 60 * 60 * 1000) },
+            { title: 'Arrived at destination', detail: 'Seller marked arrival in Chilenje', occurredAt: new Date(Date.now() - 4 * 60 * 60 * 1000) },
+          ],
         },
-      });
-    }
-
-    if (o.tracking) {
-      await prisma.deliveryEvent.createMany({
-        data: [
-          {
-            orderId: order.id,
-            title: 'Parcel received by courier',
-            detail: `Collected from ${o.origin}`,
-            occurredAt: o.dispatchedAt ?? new Date(),
-          },
-          {
-            orderId: order.id,
-            title: 'Out for delivery',
-            detail: `Destination: ${o.destination}`,
-            occurredAt: new Date(),
-          },
-        ],
-      });
-    }
-  }
-
-  console.log('Seed complete:', {
-    users: await prisma.user.count(),
-    orders: await prisma.order.count(),
+      },
+    },
   });
+  await prisma.escrowLedgerEntry.create({
+    data: { orderId: o1.id, type: LedgerType.HOLD, amountZmw: new Decimal(450.00), note: 'Payment confirmed — funds held in escrow' },
+  });
+
+  // ── Order 2 — AWAITING_DISPATCH ────────────────────────────────────────
+  const o2 = await prisma.order.create({
+    data: {
+      publicId: 'ME2U-0002',
+      buyerId: buyer.id,
+      sellerId: seller.id,
+      itemDescription: 'Laptop Stand (aluminium)',
+      amountZmw: new Decimal(320.00),
+      status: OrderStatus.AWAITING_DISPATCH,
+      paymentProvider: WalletProvider.MTN,
+      origin: 'Lusaka CBD',
+      destination: 'Kabulonga, Lusaka',
+      payment: {
+        create: {
+          status: PaymentStatus.ESCROWED,
+          provider: WalletProvider.MTN,
+          escrowedAt: new Date(Date.now() - 1 * 24 * 60 * 60 * 1000),
+        },
+      },
+    },
+  });
+  await prisma.escrowLedgerEntry.create({
+    data: { orderId: o2.id, type: LedgerType.HOLD, amountZmw: new Decimal(320.00), note: 'Payment confirmed — funds held in escrow' },
+  });
+
+  // ── Order 3 — DELIVERED ────────────────────────────────────────────────
+  const deliveredAt = new Date(Date.now() - 5 * 24 * 60 * 60 * 1000);
+  const o3 = await prisma.order.create({
+    data: {
+      publicId: 'ME2U-0003',
+      buyerId: buyer.id,
+      sellerId: seller.id,
+      itemDescription: 'USB-C Hub (7-port)',
+      amountZmw: new Decimal(185.00),
+      status: OrderStatus.DELIVERED,
+      paymentProvider: WalletProvider.AIRTEL,
+      origin: 'Lusaka CBD',
+      destination: 'Woodlands, Lusaka',
+      courier: "Seller's own driver",
+      dispatchedAt: new Date(deliveredAt.getTime() - 2 * 24 * 60 * 60 * 1000),
+      buyerConfirmedAt: deliveredAt,
+      payment: {
+        create: {
+          status: PaymentStatus.RELEASED,
+          provider: WalletProvider.AIRTEL,
+          escrowedAt: new Date(deliveredAt.getTime() - 3 * 24 * 60 * 60 * 1000),
+          releasedAt: deliveredAt,
+        },
+      },
+    },
+  });
+  await prisma.escrowLedgerEntry.createMany({
+    data: [
+      { orderId: o3.id, type: LedgerType.HOLD, amountZmw: new Decimal(185.00), note: 'Payment confirmed — funds held in escrow' },
+      { orderId: o3.id, type: LedgerType.RELEASE, amountZmw: new Decimal(185.00), note: 'Buyer confirmed receipt' },
+    ],
+  });
+
+  // ── Order 4 — DISPUTE ─────────────────────────────────────────────────
+  const o4 = await prisma.order.create({
+    data: {
+      publicId: 'ME2U-0004',
+      buyerId: buyer.id,
+      sellerId: seller.id,
+      itemDescription: 'Mechanical Keyboard',
+      amountZmw: new Decimal(780.00),
+      status: OrderStatus.DISPUTE,
+      paymentProvider: WalletProvider.MTN,
+      origin: 'Lusaka CBD',
+      destination: 'Emmasdale, Lusaka',
+      courier: 'Zampost',
+      trackingNumber: 'ZAM-1122334',
+      dispatchedAt: new Date(Date.now() - 6 * 24 * 60 * 60 * 1000),
+      payment: {
+        create: {
+          status: PaymentStatus.ESCROWED,
+          provider: WalletProvider.MTN,
+          escrowedAt: new Date(Date.now() - 7 * 24 * 60 * 60 * 1000),
+        },
+      },
+      dispute: {
+        create: {
+          raisedById: buyer.id,
+          reason: 'Package arrived damaged',
+          detail: 'Keyboard has broken keycaps and the USB cable is missing.',
+          status: DisputeStatus.OPEN,
+        },
+      },
+    },
+  });
+  await prisma.escrowLedgerEntry.create({
+    data: { orderId: o4.id, type: LedgerType.HOLD, amountZmw: new Decimal(780.00), note: 'Payment confirmed — funds held in escrow' },
+  });
+
+  // ── Order 5 — PAYMENT_PENDING ──────────────────────────────────────────
+  await prisma.order.create({
+    data: {
+      publicId: 'ME2U-0005',
+      buyerId: buyer.id,
+      sellerId: seller.id,
+      itemDescription: 'Smartphone Case (iPhone 15)',
+      amountZmw: new Decimal(95.00),
+      status: OrderStatus.PAYMENT_PENDING,
+      paymentProvider: WalletProvider.AIRTEL,
+      origin: 'Lusaka CBD',
+      destination: 'Chelstone, Lusaka',
+      payment: {
+        create: {
+          status: PaymentStatus.PENDING,
+          provider: WalletProvider.AIRTEL,
+        },
+      },
+    },
+  });
+
+  console.log('  ✓ 5 sample orders created across all lifecycle stages');
+  console.log('\n🎉  Seed complete!\n');
+  console.log('  Dev users:');
+  console.log(`    Buyer  → ${buyer.name}  (phone: ${buyer.phone})`);
+  console.log(`    Seller → ${seller.name} (phone: ${seller.phone})`);
+  console.log(`    Admin  → ${admin.name} (phone: ${admin.phone})`);
 }
 
 main()
-  .catch((e) => {
-    console.error(e);
-    process.exit(1);
-  })
+  .catch((e) => { console.error(e); process.exit(1); })
   .finally(() => prisma.$disconnect());
